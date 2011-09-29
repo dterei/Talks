@@ -2,9 +2,9 @@
 
 Did a talk at the HIW 2011; in Tokyo, Japan. Talk was about the Safe Haskell project.
 
- * Home page for talk is [here][http://www.haskell.org/haskellwiki/HaskellImplementorsWorkshop/2011]
+ * Home page for talk is [here](http://www.haskell.org/haskellwiki/HaskellImplementorsWorkshop/2011)
 
- * More information on Safe Haskell can be found [here][http://www.scs.stanford.edu/~davidt/safehaskell.html]
+ * More information on Safe Haskell can be found [here](http://www.scs.stanford.edu/~davidt/safehaskell.html)
 
 Authors
 -------
