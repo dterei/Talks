@@ -1,0 +1,32 @@
+Graph reduction: What kind of graph? DAG?
+
+are let bindings computed once and shared?
+e.g
+f x = let g = expensiveComputation 5 in x + 5
+
+Is lazy evaluation explicit in Core / STG? Or is Core still lazy?
+
+how is seq implemented?
+
+how is lazy eval done and graph reduction? Is there some intelligence
+to the eval order (e.g rts basically has a graph evaluator) or is it
+simply that each function is compiled locally to be lazy and when they
+combine the various amounts of strictness evaluate the program? What
+about EZY claim that IO is the evaluator?
+
+any difference between let and where?
+
+what does 'case xs of _' _ mean in core?
+
+---
+
+In STG we have these nice rules:
+
+ - case = evaluation and only place evaluation occurs
+ - let  = allocation
+
+Two questions though about lazy evaluation and allocation in STG:
+
+ - Is let the only place allocation occurs? What abbout partial application?
+ - Are function application suspended in general? So function application is an allocation of a thunk?
+
