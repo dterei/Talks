@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+	<meta name="viewport" content="width=1024, user-scalable=no">
+
+	<title>Reigning in the Memory Manager in Go</title>
+	
+	<!-- Required stylesheet -->
+	<link rel="stylesheet" href="core/deck.core.css">
+	
+	<!-- Extension CSS files go here. Remove or add as needed. -->
+	<link rel="stylesheet" href="extensions/goto/deck.goto.css">
+	<link rel="stylesheet" href="extensions/menu/deck.menu.css">
+	<link rel="stylesheet" href="extensions/navigation/deck.navigation.css">
+	<link rel="stylesheet" href="extensions/status/deck.status.css">
+	<link rel="stylesheet" href="extensions/hash/deck.hash.css">
+	<link rel="stylesheet" href="extensions/scale/deck.scale.css">
+
+	<!-- Style theme. More available in /themes/style/ or create your own. -->
+	<link rel="stylesheet" href="themes/style/web-2.0.css">
+	
+	<!-- Transition theme. More available in /themes/transition/ or create your own. -->
+	<!--link rel="stylesheet" href="themes/transition/horizontal-slide.css"-->
+	
+	<!-- Required Modernizr file -->
+	<script src="modernizr.custom.js"></script>
+</head>
+<body class="deck-container">
+
+<!-- Begin slides. Just make elements with a class of slide. -->
+
+<section class="slide">
+	<h1>Reigning in the Memory Manager in Go</h1>
+</section>
+
+<section class="slide">
+<h2>Hi, I'm David Terei</h2>
+<ul>
+  <li>Live in San Francisco</li>
+  <li>Computer Science PhD student @ Stanford University</li>
+  <li>Co-founder of a startup called MemCachier</li>
+  <li>Born in Sydney</li>
+  <li>Hungarian father, Australian mother (don't speak Hungarian sadly)</li>
+</ul>
+</section>
+
+<section class="slide">
+<h2>Today I'll be talking about Memory Management in Go</h2>
+<h3>MemCachier is...</h3>
+<ul>
+  <li>...a cloud caching service</li>
+  <li>...written in Go</li>
+  <li>...manages many users' cache in unified large clusters
+    <ul>
+      <li>Easier to allocate resources to users</li>
+      <li>Easier to manage</li>
+      <li>Better utilization</li>
+    </ul>
+  </li>
+  <p class="slide" style="font-size:170%">Basically, we're multi-tenant <code>memcached</code></p>
+</section>
+
+<section class="slide">
+  <h2>Why use Go?</h2>
+  <p>Memcache is typically written in <strong>C</strong>, but we went with <strong>Go</strong>...</p>
+  <ul>
+    <li>Fun &mdash; hard to program in C again after using Go</li>
+    <li>Goroutines &mdash; Cheap, lighweight user threads, M:N threading model (Haskell as well!)</li>
+    <li>High performance &mdash; within 2x of C, can drop into C or assembly cheaply and easily</li>
+    <li>Great standard library makes for quick development
+      <ul><li>net, RPC, binary, hash</li></ul>
+    </li>
+  </ul>
+</section>
+
+<section class="slide">
+  <h2>Why we care about GC performance</h2>
+  <p>MemCachier is latency sensitive. We need to answer queries...
+    <ul>
+      <li>...many times faster than a web server</li>
+      <li>...faster than a database</li>
+      <li>...within microseconds on average</li>
+      <li>...within milliseconds at the tail</li>
+    </ul>
+  </p>
+  <p>Our servers are heavily loaded:
+    <ul>
+      <li>~15GB per machine</li>
+      <li>&gt;1GB per server process</li>
+      <li>Millions of entries per server process</li>
+    </ul>
+  <h3 class="slide">GC pauses are a killer!</h3>
+</section>
+
+<section class="slide">
+	<h1>The GC in Action</h1>
+</section>
+
+<section class="slide">
+  <h2>The GC in Action: End-to-end benchmark</h2>
+  <pre style="float: left; width: 47%">
+    type User struct {
+      entries map[string]*CacheValue
+      ...metadata...
+    }
+
+    type Cache map[username]*User
+  </pre>
+  <div style="float:right; width: 40%">At 1.6GB
+    <ul>
+      <li>Steady-state GC is nearly 100ms</li>
+      <li>Max GC is <strong><em>over a second!</em></strong></li>
+    </ul>
+  </div>
+  <img src="images/gcnormal.svg" width="90%" style="clear: both;"/>
+</section>
+
+<section class="slide">
+<h2>Why is this happening?</h2>
+
+<p>The garbage collector has two phases:</p>
+<div style="float:left;width:50%">
+<h4><strong>Mark:</strong></h4>
+  <pre>
+    mark(toplevelPointers)
+
+    func mark(ps []Pointer) {
+      for _,p := range(ps) {
+        setLiveBit(p)
+        mark(p.Children())
+      }
+    }
+  </pre>
+</div>
+<div style="float:right; width:50%">
+<h4>Sweep:</h4>
+  <pre>
+    cur := firstPointerInHeap
+    while cur != nil {
+      next := cur.next
+      if !cur.Live() {
+        free(cur)  
+      }
+      cur = next
+    }
+  </pre>
+</div>
+
+</section>
+
+<section class="slide">
+  <h2>The GC in Action</h2>
+  <h3>Lots of garbage</h3>
+  <img src="images/dpointers.svg" width="80%"/>
+</section>
+
+<section class="slide">
+  <h2>The GC in Action</h2>
+  <img src="images/memsize.svg" width="60%"/>
+  <img src="images/pointers.svg" width="60%"/>
+</section>
+
+<section class="slide">
+  <h2>The GC in Action: Effect of Heap Size</h2>
+  <img src="images/memsize.svg" width="70%"/>
+  <ul>
+    <li>As expected, GC pause time grows with heap size</li>
+    <li>But not <strong>so</strong> bad...
+      <ul>
+        <li>128MB heap size &rarr; 1-2ms pause</li>
+        <li>1GB heap size &rarr; &gt;10ms pause</li>
+      </ul>
+    </li>
+    <li>Pretty hard to avoid (but we'll address it)</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <h2>The GC in Action: Effect of # Live Objects</h2>
+  <img src="images/pointers.svg" width="70%"/>
+  <ul>
+    <li>As expected, GC pause time grows # of live objects</li>
+    <li>More accute problem than heap size:
+      <ul>
+        <li>Up to 10,000 in under 1ms</li>
+        <li>On the order of seconds for large numbers of pointers</li>
+      </ul>
+    </li>
+    <li>Each MemCachier server holds millions of entries &rarr; many millions of pointers</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <h1>We <em>have</em> to get around the garbage collector...</h1>
+</section>
+
+<section class="slide">
+  <h2>The <code>unsafe</code> package</h2>
+  <pre>
+    type Pointer *ArbitraryTypepre
+
+    1) <strong>A pointer value of any type can be converted to a Pointer.</strong>
+    2) <strong>A Pointer can be converted to a pointer value of any type.</strong>
+    3) A uintptr can be converted to a Pointer.
+    4) A Pointer can be converted to a uintptr.
+  </pre>
+  <br/><br/>
+  <p style="font-size:250%" class="slide">
+    We can use <code>unsafe.Pointer</code> to do our own
+    memory management!
+  </p>
+</section>
+
+<section class="slide">
+<h2>For example...</h2>
+<pre>
+type CacheValue {
+  ...bunch of metadata...  
+}
+
+var greatBigSlice []byte = make([]byte, 4GB)
+
+func Get(offset int) (*CacheValue) {
+  return (*CacheValue)(unsafe.Pointer(&greatBigSlice[offset]))
+}
+</pre>
+</section>
+
+<section class="slide">
+  <h2>OK, well not exactly...</h2>
+
+  <p>The problem is that <code>CacheValue</code> actually looks like this:</p>
+  <pre>
+  type CacheValue struct {
+    <strong>Key          []byte</strong>
+    <strong>Value        []byte</strong>
+    <strong>Flags        []byte</strong>
+    Expiration   uint32
+    Version      uint64        
+  }
+  </pre>
+
+  <ul class="slide">
+    <li>The value in these fields is just a pointer</li>
+    <li>Won't get serilized to the <code>[]byte</code></li>
+    <li>It's still controlled by the memory manager</li>
+  </ul>
+
+  <ul class="slide">
+    <li>Luckily, these happen to be the same type as the big slice</li>
+    <li>If we just keep track of the offsets, we can store them directly</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <h2>A Slab Memory Allocator</h2>
+  <p>A slab memory-allocator stores memory objects in fix sized bins.</p>
+  <p>Why?
+    <ul>
+      <li>Easier to find space to fit a new object</li>
+      <li>Deleted items are trivial to recycle</li>
+      <li>Can avoid compaction in many cases</li>
+      <li>Trade internal fragmentation for external fragmentation</li>
+    </ul>
+  </p>
+</section>
+
+<section class="slide">
+  <h2>A Slab Memory Allocator</h2>
+
+  <p>A Chunk represents an application-level item in the allocator</p>
+  <p>A Page is a 1MB region containing Chunks of one size.</p>
+  <p>Slabs manage pages for the same chunk sizes.</p>
+  <pre>
+type Chunk []byte
+ 
+type Page []byte
+
+type Slab struct {
+  Pages     []Page
+  FreePage  uint16 // Next free page
+  FreeItem  uint16 // Next free item slot
+  ChunkSize ByteSize
+}
+  </pre>
+</section>
+
+<section class="slide">
+<h2>A Slab Allocator</h2>
+<p>Structure of the top level Slab-based cache.</p>
+<pre>
+type Cache struct {
+  // 15 pointers
+  Slabs   [MAX_FACTOR - MIN_FACTOR + 1]Slab
+
+  // Protects access to each slab meta data
+  Slabtex [MAX_FACTOR - MIN_FACTOR + 1]sync.Mutex
+
+  // Stores the memory location of the beginning of a chain
+  // for hashed keys.
+  Keys    [HASH_SLOTS]MemRef
+
+  // Protects linked chains in the hash-map.
+  Keytex  [HASH_SLOTS]sync.Mutex
+}
+</pre>
+</section>
+
+<section class="slide">
+<h2>A Slab Memory Allocator</h2>
+<p>To get data in and out of the allocator:</p>
+<pre>
+func (ptr MemRef) toChunk(c *Cache) Chunk {
+  slab := c.GetSlab(ptr.Slab)
+  page := slab.Pages[ptr.Page]
+  chunkNum := ByteSize(ptr.Chunk)
+  return Chunk(page[slab.ChunkSize * chunkNum:][:slab.ChunkSize])
+}
+
+func (ptr MemRef) toHeader(c *Cache) (*ItemHeader) {
+  chunk := ptr.toChunk(c)
+  return (*ItemHeader)(unsafe.Pointer(&chunk[0]))
+}
+</pre>
+</section>
+
+<section class="slide">
+  <h1>Some cute hacks...</h1>
+</section>
+
+<section class="slide">
+<h2>Cute hacks - inline assembly</h2>
+<p>
+  Use native operations instead of log functions on <code>Floats</code>
+</p>
+<pre>
+TEXT ·log2Floor(SB),7,$0
+	BSRQ 8(SP), AX  // 8(SP) is the first argument
+	MOVQ AX, 16(SP) // store result
+	RET
+</pre>
+<p>About an order of magnitude faster, used many times per Get/Set</p>
+</section>
+
+<section class="slide">
+<h2>Cute hacks - saving a few bytes</h2>
+<p>Instead of 64-bit pointers, we use a struct with three 16-bit indexes.
+<p>Doesn't matter alone, but helps save 4 bytes here and there when reused in
+other structs.
+<pre>
+type MemRef struct {
+  Slab    uint16
+  Page    uint16
+  Chunk   uint16
+}
+</pre>
+</section>
+
+<section class="slide">
+  <h2>An end-to-end benchmark (Remember this?)</h2>
+  <img src="images/gc.svg" width="70%"/>
+  <p>The GC with slab based version:</p>
+  <ul>
+    <li>Constant vs. number of MemCachier entries</li>
+    <li>~5-7ms in steady-state</li>
+    <li>~25ms maximum</li>
+  </ul>
+  <p>Compare this to ~100ms in steady-state and 1 secondmaximum for 1GB</p>
+</section>
+
+<section class="slide">
+  <h1>OK, I lied...</h1>
+  <h2 style="padding-top:4em;"></h2>
+<pre>
+var greatBigSlice []byte = make([]byte, 4GB)
+</pre>
+</section>
+
+<section class="slide">
+  <h2>Use <code>Mmap</code> to directly allocate memory</h2>
+  <p>
+    When using <code>make</code> to allocate <code>[]byte</code>, GC pauses still
+    grew to 20ms steady state and 500ms max.
+  </p>
+  <pre>
+page, err := syscall.Mmap(-1, 0, int(PAGE_SIZE),
+                          syscall.PROT_READ | syscall.PROT_WRITE,
+                          syscall.MAP_ANON | syscall.MAP_PRIVATE)
+  </pre>
+  <p>This makes the GC totally ignore this part of the heap.</p>
+</section>
+
+<section class="slide">
+<h2>Thanks!</h2>
+
+<h4>Check us out! <a href="http://memcachier.com">memcachier.com</a></h4>
+<h4>Contact:</h4>
+  <ul>
+    <li><a href="https://davidterei.com">davidterei.com</a></li>
+    <li><a href="mailto:david@davidterei.com">d@davidterei.com</a></li>
+  </ul>
+  <br/>
+  <p style="font-size:125%">Be excellent to each other!</p>
+</section>
+<!-- End slides. -->
+
+
+<!-- Begin extension snippets. Add or remove as needed. -->
+
+<!-- deck.navigation snippet -->
+<a href="#" class="deck-prev-link" title="Previous">&#8592;</a>
+<a href="#" class="deck-next-link" title="Next">&#8594;</a>
+
+<!-- deck.status snippet -->
+<p class="deck-status">
+	<span class="deck-status-current"></span>
+	/
+	<span class="deck-status-total"></span>
+</p>
+
+<!-- deck.goto snippet -->
+<form action="." method="get" class="goto-form">
+	<label for="goto-slide">Go to slide:</label>
+	<input type="text" name="slidenum" id="goto-slide" list="goto-datalist">
+	<datalist id="goto-datalist"></datalist>
+	<input type="submit" value="Go">
+</form>
+
+<!-- deck.hash snippet -->
+<a href="." title="Permalink to this slide" class="deck-permalink">#</a>
+
+<!-- End extension snippets. -->
+
+
+<!-- Required JS files. -->
+<script src="jquery-1.7.2.min.js"></script>
+<script src="core/deck.core.js"></script>
+
+<!-- Extension JS files. Add or remove as needed. -->
+<script src="core/deck.core.js"></script>
+<script src="extensions/hash/deck.hash.js"></script>
+<script src="extensions/menu/deck.menu.js"></script>
+<script src="extensions/goto/deck.goto.js"></script>
+<script src="extensions/status/deck.status.js"></script>
+<script src="extensions/navigation/deck.navigation.js"></script>
+<script src="extensions/scale/deck.scale.js"></script>
+
+<!-- Initialize the deck. You can put this in an external file if desired. -->
+<script>
+	$(function() {
+		$.deck('.slide');
+	});
+</script>
+</body>
+</html>
