@@ -347,7 +347,7 @@ TEXT ·log2Floor(SB),7,$0
 <section class="slide">
 <h2>Cute hacks - saving a few bytes</h2>
 <p>Instead of 64-bit pointers, we use a struct with three 16-bit indexes.
-<p>Doesn't matter alone, but helps save 4 bytes here and there when reused in
+<p>Doesn't matter alone, but helps save 2 bytes here and there when reused in
 other structs.
 <pre>
 type MemRef struct {
