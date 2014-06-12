@@ -1,8 +1,8 @@
-# Software Research Lunch
+# International Symposium on Memory Management (ISMM) 2014
 
-Where: Stanford, Gates 463A
-When: Friday, April 18th, 2014
-Who: Stanford Students and Faculty
+[homepage](http://ismm2014.cs.tufts.edu/)
 
-Stanford Software Reseach lunch, presenting M3 work.
+Where: Edinburgh, Scotland, UK
+When: Thursday, June 12, 2014
+Who: Researchers
 
